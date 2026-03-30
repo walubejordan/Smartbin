@@ -9,12 +9,12 @@ import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../config.dart';
-import '../../services/api_service.dart';
-import '../../theme/app_colors.dart';
-import '../../widgets/app_card.dart';
-import '../../widgets/liquid_linear_progress_indicator.dart';
-import '../../widgets/smartbin_fill_icon.dart';
+import '../../../config.dart';
+import '../../../services/api_service.dart';
+import '../../../theme/app_colors.dart';
+import '../../../widgets/app_card.dart';
+import '../../../widgets/liquid_linear_progress_indicator.dart';
+import '../../../widgets/smartbin_fill_icon.dart';
 
 class AdminMapViewScreen extends StatefulWidget {
   final Map<String, dynamic> user;
@@ -429,12 +429,15 @@ class _AdminMapViewScreenState extends State<AdminMapViewScreen> {
                               urlTemplate:
                                   'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}@2x?access_token=${AppConfig.mapboxApiKey}',
                               userAgentPackageName: 'smartbin_mobile',
+                              tileProvider: NetworkTileProvider(),
                             )
                           else
                             TileLayer(
                               urlTemplate:
-                                  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                  'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                              subdomains: const ['a', 'b', 'c'],
                               userAgentPackageName: 'smartbin_mobile',
+                              tileProvider: NetworkTileProvider(),
                             ),
                           if (_routePoints.isNotEmpty)
                             PolylineLayer(

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
-import '../../services/api_service.dart';
+import '../../../services/api_service.dart';
 import '../login_screen.dart';
 import '../notifications_screen.dart';
 import '../settings_screen.dart';
@@ -11,10 +11,12 @@ import 'create_bin_screen.dart';
 import 'collectors_list_screen.dart';
 import 'create_user_screen.dart';
 import 'admin_map_view_screen.dart';
-import '../../widgets/app_card.dart';
-import '../../widgets/status_icon.dart';
-import '../../theme/app_colors.dart';
-import '../../widgets/notification_bell_with_badge.dart';
+import '../../../widgets/app_card.dart';
+import '../../../widgets/status_icon.dart';
+import '../../../theme/app_colors.dart';
+import '../../../widgets/notification_bell_with_badge.dart';
+import '../../../widgets/admin_sidebar.dart';
+import 'smartwaste_dashboard_tab.dart';
 
 class AdminDashboard extends StatefulWidget {
   final Map<String, dynamic> user;
@@ -94,68 +96,118 @@ class _AdminDashboardState extends State<AdminDashboard> {
   Widget build(BuildContext context) {
     final isWide = MediaQuery.sizeOf(context).width >= _wideBreakpoint;
 
+    final userName = widget.user['name']?.toString() ?? 'Admin';
+    final userEmail = widget.user['email']?.toString() ?? '';
+
+    void selectIndex(int index) {
+      setState(() => _selectedIndex = index);
+      if (!isWide) {
+        Navigator.of(context).pop();
+      }
+    }
+
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_getAppBarTitle()),
-        backgroundColor: AppColors.scaffoldBackground,
-        foregroundColor: AppColors.headerText,
-        elevation: 0,
-        automaticallyImplyLeading: !isWide,
-        actions: [
-          NotificationBellWithBadge(
-            unreadCount: _unreadCount,
-            icon: Icons.notifications,
-            iconColor: AppColors.headerText,
-            onPressed: () async {
-              await Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const NotificationsScreen()),
-              );
-              if (!mounted) return;
-              _loadUnreadCount();
-            },
-          ),
-        ],
-      ),
-      // On mobile, show a hamburger drawer (left). On wide web, show a permanent left rail.
-      drawer: isWide ? null : _buildDrawer(),
-      body: isWide ? _buildWideBody() : _buildNarrowBody(),
-      // On narrow/mobile, keep bottom tabs for main 3 screens.
-      bottomNavigationBar: !isWide && _selectedIndex <= 2
-          ? BottomNavigationBar(
-              currentIndex: _selectedIndex,
-              onTap: (index) => setState(() => _selectedIndex = index),
-              type: BottomNavigationBarType.fixed,
-              selectedItemColor: AppColors.primaryGreen,
-              unselectedItemColor: Colors.grey,
-              items: [
-                BottomNavigationBarItem(
-                  icon: _navAssetIcon('assets/reference/dashboard-ref.png'),
-                  activeIcon: _navAssetIcon(
-                    'assets/reference/dashboard-ref.png',
-                    active: true,
-                  ),
-                  label: 'Dashboard',
+      backgroundColor: AppColors.scaffoldBackground,
+      appBar: isWide
+          ? null
+          : AppBar(
+              title: Text(
+                _getAppBarTitle(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              backgroundColor: AppColors.scaffoldBackground,
+              foregroundColor: AppColors.headerText,
+              elevation: 0,
+              leading: Builder(
+                builder: (context) => IconButton(
+                  icon: const Icon(Icons.menu),
+                  onPressed: () => Scaffold.of(context).openDrawer(),
                 ),
-                BottomNavigationBarItem(
-                  icon: _navAssetIcon('assets/reference/image_d7ba5a.png'),
-                  activeIcon: _navAssetIcon(
-                    'assets/reference/image_d7ba5a.png',
-                    active: true,
-                  ),
-                  label: 'Bins',
-                ),
-                BottomNavigationBarItem(
-                  icon: _navAssetIcon('assets/reference/profile.png'),
-                  activeIcon: _navAssetIcon(
-                    'assets/reference/profile.png',
-                    active: true,
-                  ),
-                  label: 'Collectors',
+              ),
+              actions: [
+                NotificationBellWithBadge(
+                  unreadCount: _unreadCount,
+                  icon: Icons.notifications,
+                  iconColor: AppColors.headerText,
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const NotificationsScreen(),
+                      ),
+                    );
+                    if (!mounted) return;
+                    _loadUnreadCount();
+                  },
                 ),
               ],
+            ),
+      drawer: isWide
+          ? null
+          : Drawer(
+              child: AdminSidebar(
+                selectedIndex: _selectedIndex,
+                collapsed: false,
+                showCollapseButton: false,
+                userName: userName,
+                userEmail: userEmail,
+                onSelect: selectIndex,
+                onLogout: () {
+                  Navigator.of(context).pop();
+                  _logout();
+                },
+              ),
+            ),
+      body: isWide
+          ? SizedBox.expand(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AdminSidebar(
+                    selectedIndex: _selectedIndex,
+                    collapsed: false,
+                    userName: userName,
+                    userEmail: userEmail,
+                    onSelect: selectIndex,
+                    onLogout: () {
+                      _logout();
+                    },
+                    showCollapseButton: true,
+                  ),
+                  VerticalDivider(
+                    width: 1,
+                    thickness: 1,
+                  ),
+                  Expanded(
+                    child: SafeArea(
+                      child: Column(
+                        children: [
+                          _buildDesktopNavbar(),
+                          Expanded(child: _buildMainArea()),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             )
-          : null,
+          : _buildMainArea(),
     );
+  }
+
+  Widget _buildMainArea() {
+    // Dashboard tab is mock-data driven and should render immediately.
+    if (_selectedIndex == 0) {
+      return SmartWasteDashboardTab(
+        userName: widget.user['name']?.toString() ?? 'Admin',
+      );
+    }
+
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    return _buildContent();
   }
 
   Widget _buildNarrowBody() {
@@ -168,7 +220,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     return Row(
       children: [
         Container(
-          width: 220,
+          width: 280,
           decoration: BoxDecoration(
             color: Colors.white,
             border: Border(
@@ -184,55 +236,143 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
           child: Column(
             children: [
-              const SizedBox(height: 16),
-              _buildSideNavItem(
-                index: 0,
-                label: 'Dashboard',
-                icon: const Icon(Icons.home_outlined),
+              // Sidebar Header with user info
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.primaryGreen.withOpacity(0.1),
+                      AppColors.primaryGreen.withOpacity(0.05),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  border: Border(
+                    bottom: BorderSide(color: Colors.grey.shade200),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    CircleAvatar(
+                      radius: 24,
+                      backgroundColor: AppColors.primaryGreen.withOpacity(0.2),
+                      child: Text(
+                        widget.user['name'].toString().isNotEmpty
+                            ? widget.user['name'][0].toUpperCase()
+                            : 'A',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.primaryGreen,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      widget.user['name'] ?? 'Admin',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.headerText,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      widget.user['email'] ?? '',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.subText,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
               ),
-              _buildSideNavItem(
-                index: 1,
-                label: 'Bins',
-                icon: _navAssetIcon('assets/reference/image_d7ba5a.png'),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  children: [
+                    _buildSideNavItem(
+                      index: 0,
+                      label: 'Dashboard',
+                      icon: const Icon(Icons.home_outlined),
+                    ),
+                    _buildSideNavItem(
+                      index: 1,
+                      label: 'Bins',
+                      icon: _navAssetIcon('assets/reference/image_d7ba5a.png'),
+                    ),
+                    _buildSideNavItem(
+                      index: 2,
+                      label: 'Collectors',
+                      icon: const Icon(Icons.local_shipping_outlined),
+                    ),
+                    _buildSideNavItem(
+                      index: 4,
+                      label: 'Map',
+                      icon: const Icon(Icons.map_outlined),
+                    ),
+                    _buildSideNavItem(
+                      index: 5,
+                      label: 'Add User',
+                      icon: const Icon(Icons.person_add_outlined),
+                    ),
+                    _buildSideNavItem(
+                      index: 6,
+                      label: 'Analytics',
+                      icon: _navAssetIcon('assets/reference/analytics.png'),
+                    ),
+                  ],
+                ),
               ),
-              _buildSideNavItem(
-                index: 2,
-                label: 'Truck',
-                icon: const Icon(Icons.local_shipping_outlined),
+              // Bottom section with Settings, Profile, and Logout
+              Container(
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: Colors.grey.shade200),
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildSideNavItem(
+                      index: 7,
+                      label: 'Settings',
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                    _buildSideNavItem(
+                      index: 8,
+                      label: 'Profile',
+                      icon: _navAssetIcon('assets/reference/profile.png'),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 4),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: TextButton.icon(
+                          icon: const Icon(Icons.logout, size: 20),
+                          label: const Text('Logout'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.red,
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          onPressed: _logout,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
               ),
-              _buildSideNavItem(
-                index: 4,
-                label: 'Map',
-                icon: const Icon(Icons.map_outlined),
-              ),
-              _buildSideNavItem(
-                index: 5,
-                label: 'Add User',
-                icon: const Icon(Icons.person_add_outlined),
-              ),
-              _buildSideNavItem(
-                index: 6,
-                label: 'Analytics',
-                icon: _navAssetIcon('assets/reference/analytics.png'),
-              ),
-              const Spacer(),
-              _buildSideNavItem(
-                index: 7,
-                label: 'Settings',
-                icon: const Icon(Icons.settings_outlined),
-              ),
-              _buildSideNavItem(
-                index: 8,
-                label: 'Profile',
-                icon: _navAssetIcon('assets/reference/profile.png'),
-              ),
-              const SizedBox(height: 8),
-              IconButton(
-                tooltip: 'Logout',
-                icon: const Icon(Icons.logout, color: Colors.red),
-                onPressed: _logout,
-              ),
-              const SizedBox(height: 8),
             ],
           ),
         ),
@@ -247,26 +387,62 @@ class _AdminDashboardState extends State<AdminDashboard> {
   String _getAppBarTitle() {
     switch (_selectedIndex) {
       case 0:
-        return 'SmartBin Dashboard';
+        return 'Dashboard';
       case 1:
-        return 'Manage Bins';
+        return 'Bins Management';
       case 2:
-        return 'Fleet Team';
-      case 3:
-        return 'Legacy Settings';
+        return 'Collectors';
       case 4:
-        return 'Bins Map';
-      case 5:
-        return 'Add New Bin';
+        return 'Map View';
       case 6:
-        return 'System Analytics';
+        return 'Analytics';
       case 7:
         return 'Settings';
-      case 8:
-        return 'Profile';
       default:
-        return 'SmartBin Admin';
+        return 'Admin';
     }
+  }
+
+  Widget _buildDesktopNavbar() {
+    return Container(
+      height: kToolbarHeight,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: AppColors.scaffoldBackground,
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200, width: 1),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              _getAppBarTitle(),
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.headerText,
+                  ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          NotificationBellWithBadge(
+            unreadCount: _unreadCount,
+            icon: Icons.notifications,
+            iconColor: AppColors.headerText,
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const NotificationsScreen(),
+                ),
+              );
+              if (!mounted) return;
+              _loadUnreadCount();
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildDrawer() {
@@ -431,162 +607,170 @@ class _AdminDashboardState extends State<AdminDashboard> {
       onRefresh: _loadDashboard,
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Welcome section with animation
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 500),
-              curve: Curves.easeInOut,
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Colors.green, Colors.teal],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.green.withOpacity(0.3),
-                    blurRadius: 10,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  CircleAvatar(
-                    radius: 30,
-                    backgroundColor: Colors.white.withOpacity(0.2),
-                    child: Text(
-                      widget.user['name'].toString().isNotEmpty
-                          ? widget.user['name'][0].toUpperCase()
-                          : 'A',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1440),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Welcome section with animation
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 500),
+                  curve: Curves.easeInOut,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Colors.green, Colors.teal],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.green.withOpacity(0.3),
+                        blurRadius: 10,
+                        offset: const Offset(0, 5),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Welcome back, ${widget.user['name']}!',
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 30,
+                        backgroundColor: Colors.white.withOpacity(0.2),
+                        child: Text(
+                          widget.user['name'].toString().isNotEmpty
+                              ? widget.user['name'][0].toUpperCase()
+                              : 'A',
                           style: const TextStyle(
-                            fontSize: 20,
+                            fontSize: 24,
                             fontWeight: FontWeight.bold,
                             color: Colors.white,
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Here\'s your system overview',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: Colors.white.withOpacity(0.8),
-                          ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Welcome back, ${widget.user['name']}!',
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Here\'s your system overview',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.white.withOpacity(0.8),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'System Statistics',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'System Statistics',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  height: 110,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      _buildTopStatCard(
+                        'Total Vehicles',
+                        overview['total_collectors'].toString(),
+                        Icons.local_shipping,
+                      ),
+                      _buildTopStatCard(
+                        'Employees',
+                        overview['total_collectors'].toString(),
+                        Icons.groups_rounded,
+                      ),
+                      _buildTopStatCard(
+                        'Bins',
+                        overview['total_bins'].toString(),
+                        Icons.delete_outline,
+                      ),
+                      _buildTopStatCard(
+                        'Zones',
+                        (overview['zones'] ?? 0).toString(),
+                        Icons.map_outlined,
+                      ),
+                    ],
                   ),
-            ),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 110,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  _buildTopStatCard(
-                    'Total Vehicles',
-                    overview['total_collectors'].toString(),
-                    Icons.local_shipping,
-                  ),
-                  _buildTopStatCard(
-                    'Employees',
-                    overview['total_collectors'].toString(),
-                    Icons.groups_rounded,
-                  ),
-                  _buildTopStatCard(
-                    'Bins',
-                    overview['total_bins'].toString(),
-                    Icons.delete_outline,
-                  ),
-                  _buildTopStatCard(
-                    'Zones',
-                    (overview['zones'] ?? 0).toString(),
-                    Icons.map_outlined,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Recent Activity',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            const SizedBox(height: 12),
-            AppCard(
-              child: Builder(
-                builder: (context) {
-                  final recentActivity =
-                      _dashboardData!['recent_collections'] as List<dynamic>? ??
-                          [];
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  'Recent Activity',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const SizedBox(height: 12),
+                AppCard(
+                  child: Builder(
+                    builder: (context) {
+                      final recentActivity =
+                          _dashboardData!['recent_collections']
+                                  as List<dynamic>? ??
+                              [];
 
-                  if (recentActivity.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.all(16),
-                      child: Text('No recent activity available'),
-                    );
-                  }
+                      if (recentActivity.isEmpty) {
+                        return const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text('No recent activity available'),
+                        );
+                      }
 
-                  return ListView.separated(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: recentActivity.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final item = recentActivity[index];
-                      final time = item['collection_time'] ?? '';
-                      final binCode = item['bin_code'] ?? 'Unknown Bin';
-                      final collector =
-                          item['collector_name'] ?? 'Unknown Collector';
-                      final location = item['location'] ?? 'Unknown Location';
+                      return ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: recentActivity.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = recentActivity[index];
+                          final time = item['collection_time'] ?? '';
+                          final binCode = item['bin_code'] ?? 'Unknown Bin';
+                          final collector =
+                              item['collector_name'] ?? 'Unknown Collector';
+                          final location =
+                              item['location'] ?? 'Unknown Location';
 
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor:
-                              _getActivityColor(index).withOpacity(0.1),
-                          child: Icon(
-                            Icons.check_circle_outline,
-                            color: _getActivityColor(index),
-                          ),
-                        ),
-                        title: Text('$binCode • $location'),
-                        subtitle: Text('$collector • ${_formatDateTime(time)}'),
-                        trailing: const Icon(Icons.chevron_right),
+                          return ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor:
+                                  _getActivityColor(index).withOpacity(0.1),
+                              child: Icon(
+                                Icons.check_circle_outline,
+                                color: _getActivityColor(index),
+                              ),
+                            ),
+                            title: Text('$binCode • $location'),
+                            subtitle:
+                                Text('$collector • ${_formatDateTime(time)}'),
+                            trailing: const Icon(Icons.chevron_right),
+                          );
+                        },
                       );
                     },
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -657,14 +841,34 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required Widget icon,
   }) {
     final selected = _selectedIndex == index;
-    return ListTile(
-      dense: true,
-      leading: icon,
-      title: Text(label),
-      selected: selected,
-      selectedTileColor: AppColors.primaryGreen.withOpacity(0.12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      onTap: () => setState(() => _selectedIndex = index),
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: selected ? AppColors.primaryGreen.withOpacity(0.12) : null,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: ListTile(
+        dense: false,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        leading: SizedBox(
+          width: 28,
+          height: 28,
+          child: Center(child: icon),
+        ),
+        title: Text(
+          label,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+            color: selected ? AppColors.primaryGreen : AppColors.headerText,
+          ),
+        ),
+        trailing: selected
+            ? Icon(Icons.check_circle_outline,
+                size: 18, color: AppColors.primaryGreen)
+            : null,
+        onTap: () => setState(() => _selectedIndex = index),
+      ),
     );
   }
 

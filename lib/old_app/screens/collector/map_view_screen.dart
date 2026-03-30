@@ -7,12 +7,12 @@ import 'package:latlong2/latlong.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
-import '../../services/api_service.dart';
-import '../../config.dart';
-import '../../theme/app_colors.dart';
-import '../../widgets/app_card.dart';
-import '../../widgets/liquid_linear_progress_indicator.dart';
-import '../../widgets/smartbin_fill_icon.dart';
+import '../../../services/api_service.dart';
+import '../../../config.dart';
+import '../../../theme/app_colors.dart';
+import '../../../widgets/app_card.dart';
+import '../../../widgets/liquid_linear_progress_indicator.dart';
+import '../../../widgets/smartbin_fill_icon.dart';
 
 class MapViewScreen extends StatefulWidget {
   final Map<String, dynamic> user;

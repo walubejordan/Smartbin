@@ -29,7 +29,7 @@ dependencies:
   # UI Components
   flutter_svg: ^2.0.10+1
   google_fonts: ^6.2.1
-  fl_chart: ^0.69.0
+  fl_chart: ^1.2.0
   
   # Icons (premium look)
   font_awesome_flutter: ^10.8.0
@@ -40,6 +40,8 @@ dependencies:
   latlong2: ^0.9.0
   open_route_service: ^1.2.7
   url_launcher: ^6.3.0
+  path_provider: ^2.1.5
+  open_file: ^3.5.4
   
   # Icons
   cupertino_icons: ^1.0.8

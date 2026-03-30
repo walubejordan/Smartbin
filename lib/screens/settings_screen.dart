@@ -1,556 +1,314 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../../services/api_service.dart';
-import '../../services/mqtt_service.dart';
-import '../screens/login_screen.dart' as login;
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../constants/preferences_keys.dart';
+import 'profile_settings_screen.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_theme_mode.dart';
+
+/// Unified settings: Account (nested form), optional System thresholds (admin),
+/// Theme, and Session. Opened only from the shell sidebar footer (or mobile bar).
 class SettingsScreen extends StatefulWidget {
   final Map<String, dynamic> user;
+  final void Function(Map<String, dynamic> patch) onUserUpdated;
+  final VoidCallback onLogout;
 
-  const SettingsScreen({super.key, required this.user});
+  /// When this tab is not selected, nested "Account Details" view resets.
+  final bool isSettingsTabActive;
+
+  /// Updates shell / AppBar title: `null` → "Settings", non-null → e.g. "Account Details".
+  final ValueChanged<String?>? onHeaderTitleChanged;
+
+  const SettingsScreen({
+    super.key,
+    required this.user,
+    required this.onUserUpdated,
+    required this.onLogout,
+    required this.isSettingsTabActive,
+    this.onHeaderTitleChanged,
+  });
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool _isLoading = false;
-  bool _pushNotifications = true;
-  bool _darkMode = false;
-  bool _locationServices = true;
-  bool _autoSync = true;
-  String _language = 'English';
+  bool _accountDetails = false;
+  double _fillAlertPercent = 80;
+  bool _prefsLoaded = false;
 
-  Future<void> _changePassword() async {
-    final currentPasswordController = TextEditingController();
-    final newPasswordController = TextEditingController();
-    final confirmPasswordController = TextEditingController();
+  bool get _isAdmin =>
+      widget.user['role']?.toString().toLowerCase() == 'admin';
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Change Password'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: currentPasswordController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Current Password',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: newPasswordController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'New Password',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: confirmPasswordController,
-                obscureText: true,
-                decoration: const InputDecoration(
-                  labelText: 'Confirm New Password',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (newPasswordController.text !=
-                  confirmPasswordController.text) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Passwords do not match')),
-                );
-                return;
-              }
-              Navigator.pop(context, true);
-            },
-            child: const Text('Change'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    setState(() => _isLoading = true);
-
-    // Call API to change password (add this method to API service)
-    // For now, just show success
-    setState(() => _isLoading = false);
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Password changed successfully'),
-          backgroundColor: Colors.green,
-        ),
-      );
+  @override
+  void initState() {
+    super.initState();
+    if (_isAdmin) {
+      _loadPrefs();
+    } else {
+      _prefsLoaded = true;
     }
   }
 
-  Future<void> _logout() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Logout'),
-        content: const Text('Are you sure you want to logout?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Logout'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    final apiService = Provider.of<ApiService>(context, listen: false);
-    final mqttService = Provider.of<MqttService>(context, listen: false);
-
-    mqttService.disconnect();
-
+  Future<void> _loadPrefs() async {
     try {
-      await apiService.logout();
-      if (!mounted) return;
-
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const login.LoginScreen()),
-        (route) => false,
-      );
-    } catch (e) {
+      final p = await SharedPreferences.getInstance();
+      final v = p.getInt(PreferencesKeys.adminFillLevelAlertThreshold);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _editProfile() async {
-    final nameController =
-        TextEditingController(text: widget.user['name'] ?? '');
-    final emailController =
-        TextEditingController(text: widget.user['email'] ?? '');
-    final phoneController =
-        TextEditingController(text: widget.user['phone'] ?? '');
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Profile'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Name'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: emailController,
-                decoration: const InputDecoration(labelText: 'Email'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: phoneController,
-                decoration: const InputDecoration(labelText: 'Phone'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    try {
-      setState(() => _isLoading = true);
-      final apiService = Provider.of<ApiService>(context, listen: false);
-      await apiService.updateUser(widget.user['id'],
-          name: nameController.text,
-          email: emailController.text,
-          phone: phoneController.text);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Profile updated successfully')),
-        );
-
         setState(() {
-          widget.user['name'] = nameController.text;
-          widget.user['email'] = emailController.text;
-          widget.user['phone'] = phoneController.text;
+          if (v != null && v >= 0 && v <= 100) {
+            _fillAlertPercent = v.toDouble();
+          }
+          _prefsLoaded = true;
         });
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update profile: $e')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+    } catch (_) {
+      if (mounted) setState(() => _prefsLoaded = true);
     }
   }
 
-  Future<void> _exportData() async {
-    final csv = StringBuffer();
-    csv.writeln('Field,Value');
-    csv.writeln('Name,${widget.user['name'] ?? ''}');
-    csv.writeln('Email,${widget.user['email'] ?? ''}');
-    csv.writeln('Phone,${widget.user['phone'] ?? ''}');
-    csv.writeln('Role,${widget.user['role'] ?? ''}');
-
-    await Clipboard.setData(ClipboardData(text: csv.toString()));
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content:
-                Text('Profile data copied to clipboard as CSV (for export).')),
-      );
-    }
+  Future<void> _saveFillThreshold(double v) async {
+    setState(() => _fillAlertPercent = v);
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setInt(PreferencesKeys.adminFillLevelAlertThreshold, v.round());
+    } catch (_) {}
   }
 
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open specified URL')),
-        );
-      }
+  @override
+  void didUpdateWidget(SettingsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isSettingsTabActive &&
+        !widget.isSettingsTabActive &&
+        _accountDetails) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => _accountDetails = false);
+        widget.onHeaderTitleChanged?.call(null);
+      });
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Settings'),
+  void dispose() {
+    widget.onHeaderTitleChanged?.call(null);
+    super.dispose();
+  }
+
+  void _setAccountDetails(bool open) {
+    setState(() => _accountDetails = open);
+    widget.onHeaderTitleChanged?.call(open ? 'Account Details' : null);
+  }
+
+  Widget _sectionTitle(BuildContext context, String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, top: 4),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
       ),
-      body: ListView(
+    );
+  }
+
+  Widget _cardShell({required List<Widget> children}) {
+    return Card(
+      elevation: 0,
+      color: AppColors.cardBackground,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: Colors.grey.shade200),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: children,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_accountDetails) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Profile Section
-          Container(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              children: [
-                CircleAvatar(
-                  radius: 50,
-                  backgroundColor: Colors.green.withOpacity(0.2),
-                  child: Text(
-                    widget.user['name']
-                        .toString()
-                        .split(' ')
-                        .map((n) => n[0])
-                        .take(2)
-                        .join()
-                        .toUpperCase(),
-                    style: const TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.green,
-                    ),
-                  ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 4, 8, 0),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'Back to settings',
+                onPressed: () => _setAccountDetails(false),
+              ),
+            ),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              child: ProfileSettingsScreen(
+                user: widget.user,
+                onUserUpdated: widget.onUserUpdated,
+                embedded: true,
+                insideShell: true,
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    final themeMode = context.watch<AppThemeMode>().mode;
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        _sectionTitle(context, 'Account'),
+        _cardShell(
+          children: [
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: CircleAvatar(
+                backgroundColor: AppColors.primaryGreen.withValues(alpha: 0.15),
+                child: const Icon(
+                  Icons.person_outline,
+                  color: AppColors.primaryGreen,
                 ),
-                const SizedBox(height: 16),
-                Text(
-                  widget.user['name'],
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
+              ),
+              title: Text(
+                widget.user['name']?.toString() ?? '—',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              subtitle: Text(widget.user['email']?.toString() ?? ''),
+            ),
+            const Divider(height: 24),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.manage_accounts_outlined),
+              title: const Text('Account details'),
+              subtitle: const Text('Name, email, password, and more'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _setAccountDetails(true),
+            ),
+          ],
+        ),
+        if (_isAdmin) ...[
+          const SizedBox(height: 20),
+          _sectionTitle(context, 'System thresholds'),
+          _cardShell(
+            children: [
+              const Text(
+                'Fill level alert',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Notify when a bin reaches ${_fillAlertPercent.round()}% capacity (stored on device for future alert rules).',
+                style: const TextStyle(
+                  color: AppColors.subText,
+                  fontSize: 13,
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  widget.user['email'],
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey.shade600,
+              ),
+              if (!_prefsLoaded)
+                const Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
+                )
+              else
+                Slider(
+                  value: _fillAlertPercent,
+                  min: 50,
+                  max: 100,
+                  divisions: 50,
+                  label: '${_fillAlertPercent.round()}%',
+                  onChanged: _saveFillThreshold,
                 ),
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: widget.user['role'] == 'admin'
-                        ? Colors.purple.withOpacity(0.1)
-                        : Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Text(
-                    widget.user['role'].toString().toUpperCase(),
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: widget.user['role'] == 'admin'
-                          ? Colors.purple
-                          : Colors.blue,
-                    ),
-                  ),
+            ],
+          ),
+        ],
+        const SizedBox(height: 20),
+        _sectionTitle(context, 'Theme'),
+        _cardShell(
+          children: [
+            const Text(
+              'Appearance',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 12),
+            SegmentedButton<ThemeMode>(
+              segments: const [
+                ButtonSegment(
+                  value: ThemeMode.light,
+                  label: Text('Light'),
+                  icon: Icon(Icons.light_mode_outlined),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.dark,
+                  label: Text('Dark'),
+                  icon: Icon(Icons.dark_mode_outlined),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.system,
+                  label: Text('System'),
+                  icon: Icon(Icons.brightness_auto_outlined),
                 ),
               ],
+              selected: {themeMode},
+              onSelectionChanged: (set) {
+                final m = set.first;
+                context.read<AppThemeMode>().setMode(m);
+              },
             ),
+          ],
+        ),
+        const SizedBox(height: 24),
+        _sectionTitle(context, 'Session'),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.red.shade700,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
           ),
-          const Divider(),
-
-          // Account Settings
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'Account',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.lock_outline),
-            title: const Text('Change Password'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _changePassword,
-          ),
-          ListTile(
-            leading: const Icon(Icons.person_outline),
-            title: const Text('Edit Profile'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _editProfile,
-          ),
-          const Divider(),
-
-          // App Settings
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'Preferences',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.notifications_outlined),
-            title: const Text('Push Notifications'),
-            subtitle: const Text('Receive alerts for critical bins'),
-            value: _pushNotifications,
-            onChanged: (value) {
-              setState(() => _pushNotifications = value);
-              // Save preference
-            },
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.location_on_outlined),
-            title: const Text('Location Services'),
-            subtitle: const Text('Enable location tracking for routes'),
-            value: _locationServices,
-            onChanged: (value) {
-              setState(() => _locationServices = value);
-              // Save preference
-            },
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.sync_outlined),
-            title: const Text('Auto Sync'),
-            subtitle: const Text('Automatically sync data in background'),
-            value: _autoSync,
-            onChanged: (value) {
-              setState(() => _autoSync = value);
-              // Save preference
-            },
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.dark_mode_outlined),
-            title: const Text('Dark Mode'),
-            subtitle: const Text('Use dark theme'),
-            value: _darkMode,
-            onChanged: (value) {
-              setState(() => _darkMode = value);
-              // Save preference
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.language_outlined),
-            title: const Text('Language'),
-            subtitle: Text(_language),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // Show language selection dialog
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: const Text('Select Language'),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ListTile(
-                        title: const Text('English'),
-                        onTap: () {
-                          setState(() => _language = 'English');
-                          Navigator.pop(context);
-                        },
-                      ),
-                      ListTile(
-                        title: const Text('Spanish'),
-                        onTap: () {
-                          setState(() => _language = 'Spanish');
-                          Navigator.pop(context);
-                        },
-                      ),
-                      ListTile(
-                        title: const Text('French'),
-                        onTap: () {
-                          setState(() => _language = 'French');
-                          Navigator.pop(context);
-                        },
-                      ),
-                    ],
-                  ),
+          onPressed: () async {
+            final go = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Log out'),
+                content: const Text(
+                  'You will need to sign in again to access the dashboard.',
                 ),
-              );
-            },
-          ),
-          const Divider(),
-
-          // Data Management
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'Data Management',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Log out'),
+                  ),
+                ],
               ),
-            ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.download_outlined),
-            title: const Text('Export Data'),
-            subtitle: const Text('Download your data as CSV'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _exportData,
-          ),
-          ListTile(
-            leading: const Icon(Icons.backup_outlined),
-            title: const Text('Backup Data'),
-            subtitle: const Text('Create a backup of your data'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // Backup functionality
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Backup feature coming soon')),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.clear_outlined),
-            title: const Text('Clear Cache'),
-            subtitle: const Text('Free up storage space'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              // Clear cache functionality
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cache cleared')),
-              );
-            },
-          ),
-          const Divider(),
-
-          // About
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text(
-              'About',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('App Version'),
-            trailing: Text('1.0.0'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.article_outlined),
-            title: const Text('Terms & Conditions'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _openUrl('https://example.com/terms'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.privacy_tip_outlined),
-            title: const Text('Privacy Policy'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => _openUrl('https://example.com/privacy'),
-          ),
-          const Divider(),
-
-          // Logout
-          ListTile(
-            leading: const Icon(Icons.logout, color: Colors.red),
-            title: const Text(
-              'Logout',
-              style: TextStyle(color: Colors.red),
-            ),
-            onTap: _logout,
-          ),
-          const SizedBox(height: 24),
-
-          // Footer
-          Center(
-            child: Text(
-              'SmartBin © 2026',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
+            );
+            if (go == true && context.mounted) {
+              widget.onLogout();
+            }
+          },
+          icon: const Icon(Icons.logout),
+          label: const Text('Log out'),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'You can also log out from the sidebar (desktop) or the app menu (mobile).',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
+      ],
     );
   }
 }

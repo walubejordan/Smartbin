@@ -11,24 +11,34 @@ class PushNotificationsService {
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
   Future<void> init() async {
-    // iOS/macOS permission prompt (safe to call on all platforms)
-    await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    try {
+      // Skip permission request on web (not supported)
+      if (!kIsWeb) {
+        // iOS/macOS permission prompt
+        await _messaging.requestPermission(
+          alert: true,
+          badge: true,
+          sound: true,
+        );
+      } else {
+        debugPrint('⚠️ Skipping FCM permission request on web platform');
+      }
 
-    FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
 
-    // Foreground messages
-    FirebaseMessaging.onMessage.listen((message) {
-      debugPrint('FCM foreground message: ${message.messageId}');
-    });
+      // Foreground messages
+      FirebaseMessaging.onMessage.listen((message) {
+        debugPrint('FCM foreground message: ${message.messageId}');
+      });
 
-    // App opened from terminated/background via notification tap
-    FirebaseMessaging.onMessageOpenedApp.listen((message) {
-      debugPrint('FCM opened from notification: ${message.messageId}');
-    });
+      // App opened from terminated/background via notification tap
+      FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        debugPrint('FCM opened from notification: ${message.messageId}');
+      });
+    } catch (e) {
+      debugPrint('⚠️ Push notifications initialization error: $e');
+      // Don't rethrow - allow app to continue without FCM
+    }
   }
 
   Future<String?> getToken() async {

@@ -1,8 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:http/browser_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../constants/preferences_keys.dart';
+import '../models/bin_model.dart';
+import 'notification_service.dart';
 
 class ApiService {
   // Production backend base URL (Render)
@@ -14,6 +21,11 @@ class ApiService {
 
   // use a BrowserClient on web, otherwise the default IO client
   final http.Client _client = kIsWeb ? BrowserClient() : http.Client();
+
+  Timer? _binMonitorTimer;
+  bool _binMonitoringActive = false;
+  /// Bin IDs already alerted while fill stayed at/above threshold (clears when fill drops below).
+  final Set<int> _fillAlertedBinIds = {};
 
   // Render free-tier can take ~50s to spin up. Use a 60s timeout for all
   // outbound HTTP calls so the first request doesn't fail too early.
@@ -69,6 +81,7 @@ class ApiService {
 
   // Clear token from storage
   Future<void> clearToken() async {
+    stopBinMonitoring();
     _token = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('token');
@@ -200,11 +213,73 @@ class ApiService {
     }
   }
 
+  /// Update the logged-in user's name, email, optional phone, and optional zone.
+  /// Use [includePhone] / [includeZone] so omitted fields are left unchanged on the server.
+  Future<Map<String, dynamic>> updateMyProfile({
+    required String name,
+    required String email,
+    String? phone,
+    String? zone,
+    bool includePhone = false,
+    bool includeZone = false,
+  }) async {
+    final body = <String, dynamic>{
+      'name': name.trim(),
+      'email': email.trim(),
+    };
+    if (includePhone) {
+      final p = phone?.trim();
+      body['phone'] = p == null || p.isEmpty ? null : p;
+    }
+    if (includeZone) {
+      final z = zone?.trim();
+      body['zone'] = z == null || z.isEmpty ? null : z;
+    }
+
+    final response = await _put(
+      Uri.parse('$baseUrl/auth/profile'),
+      headers: _getHeaders(),
+      body: json.encode(body),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      final d = data['data'];
+      if (d is Map<String, dynamic>) return d;
+      if (d is Map) return Map<String, dynamic>.from(d);
+      throw Exception('Invalid profile response');
+    }
+    throw Exception(data['message'] ?? 'Failed to update profile');
+  }
+
+  /// Change password for the current user.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final response = await _post(
+      Uri.parse('$baseUrl/auth/change-password'),
+      headers: _getHeaders(),
+      body: json.encode({
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+      }),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode != 200 || data['success'] != true) {
+      throw Exception(data['message'] ?? 'Failed to change password');
+    }
+  }
+
   // Get all bins (filtered by user role on backend)
-  Future<List<dynamic>> getBins({String? status, int? assignedTo}) async {
+  Future<List<dynamic>> getBins(
+      {String? status, int? assignedTo, int? limit, int? offset}) async {
     String url = '$baseUrl/bins?';
     if (status != null) url += 'status=$status&';
-    if (assignedTo != null) url += 'assigned_to=$assignedTo';
+    if (assignedTo != null) url += 'assigned_to=$assignedTo&';
+    // Fetch all bins by default (set high limit if not specified)
+    url += 'limit=${limit ?? 1000}&offset=${offset ?? 0}';
 
     final response = await _get(
       Uri.parse(url),
@@ -218,7 +293,8 @@ class ApiService {
         return raw;
       }
       if (raw is Map<String, dynamic>) {
-        final nested = raw['bins'] ?? raw['items'] ?? raw['results'];
+        final nested =
+            raw['bins'] ?? raw['items'] ?? raw['results'] ?? raw['data'];
         if (nested is List) {
           return nested;
         }
@@ -242,6 +318,38 @@ class ApiService {
     } else {
       throw Exception(data['message'] ?? 'Failed to get bin');
     }
+  }
+
+  /// Logged-in collector's collection history (joined with bin code & location).
+  Future<List<dynamic>> getCollectionHistory() async {
+    final response = await _get(
+      Uri.parse('$baseUrl/collections/my-history'),
+      headers: _getHeaders(),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      final list = data['data'];
+      if (list is List) return list;
+      return [];
+    }
+    throw Exception(data['message'] ?? 'Failed to load collection history');
+  }
+
+  /// Recent collections org-wide (admin only). `GET /api/collections?limit=`.
+  Future<List<dynamic>> getRecentCollections({int limit = 10}) async {
+    final response = await _get(
+      Uri.parse('$baseUrl/collections?limit=$limit'),
+      headers: _getHeaders(),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      final list = data['data'];
+      if (list is List) return list;
+      return [];
+    }
+    throw Exception(data['message'] ?? 'Failed to load recent collections');
   }
 
   // Get bin collection history
@@ -326,6 +434,59 @@ class ApiService {
     } else {
       throw Exception(data['message'] ?? 'Failed to get dashboard');
     }
+  }
+
+  /// Admin analytics: last-7-days volume, zone stats, top collectors, impact totals.
+  Future<Map<String, dynamic>> getAnalyticsSummary() async {
+    final response = await _get(
+      Uri.parse('$baseUrl/analytics/summary'),
+      headers: _getHeaders(),
+    );
+
+    final data = json.decode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      final raw = data['data'];
+      if (raw is Map<String, dynamic>) return raw;
+      if (raw is Map) return Map<String, dynamic>.from(raw);
+      return <String, dynamic>{};
+    }
+    throw Exception(data['message'] ?? 'Failed to load analytics');
+  }
+
+  /// Admin weekly PDF report (`GET /analytics/report/weekly`).
+  Future<Uint8List> downloadWeeklyPdfReport() async {
+    final uri = Uri.parse('$baseUrl/analytics/report/weekly');
+    final headers = <String, String>{
+      ..._getHeaders(),
+      'Accept': 'application/pdf',
+    };
+    final response = await _get(uri, headers: headers);
+
+    if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+      final ct = response.headers['content-type'] ?? '';
+      if (ct.contains('pdf') || _looksLikePdf(response.bodyBytes)) {
+        return response.bodyBytes;
+      }
+    }
+
+    try {
+      final data = json.decode(utf8.decode(response.bodyBytes));
+      final msg = data is Map ? data['message']?.toString() : null;
+      throw Exception(msg ?? 'Failed to download report');
+    } catch (e) {
+      if (e is Exception) rethrow;
+      throw Exception(
+        'Failed to download report (HTTP ${response.statusCode})',
+      );
+    }
+  }
+
+  static bool _looksLikePdf(Uint8List bytes) {
+    if (bytes.length < 5) return false;
+    return bytes[0] == 0x25 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x44 &&
+        bytes[3] == 0x46;
   }
 
   // Get dashboard data (Collector)
@@ -437,6 +598,7 @@ class ApiService {
     required String email,
     required String password,
     String? phone,
+    String? zone,
     String role = 'collector',
   }) async {
     final response = await _post(
@@ -447,6 +609,7 @@ class ApiService {
         'email': email,
         'password': password,
         'phone': phone,
+        if (zone != null) 'zone': zone,
         'role': role,
       }),
     );
@@ -464,12 +627,15 @@ class ApiService {
       {String? name,
       String? email,
       String? phone,
+      String? zone,
+      bool setZone = false,
       String? role,
       String? status}) async {
     final Map<String, dynamic> body = {};
     if (name != null) body['name'] = name;
     if (email != null) body['email'] = email;
     if (phone != null) body['phone'] = phone;
+    if (setZone) body['zone'] = zone;
     if (role != null) body['role'] = role;
     if (status != null) body['status'] = status;
 
@@ -538,18 +704,23 @@ class ApiService {
     double? longitude,
     int? capacity,
     int? assignedTo,
+    String? zone,
   }) async {
+    final body = <String, dynamic>{
+      'bin_code': binCode,
+      'location': location,
+      'latitude': latitude,
+      'longitude': longitude,
+      'capacity': capacity ?? 100,
+      'assigned_to': assignedTo,
+    };
+    final z = zone?.trim();
+    if (z != null && z.isNotEmpty) body['zone'] = z;
+
     final response = await _post(
       Uri.parse('$baseUrl/bins'),
       headers: _getHeaders(),
-      body: json.encode({
-        'bin_code': binCode,
-        'location': location,
-        'latitude': latitude,
-        'longitude': longitude,
-        'capacity': capacity ?? 100,
-        'assigned_to': assignedTo,
-      }),
+      body: json.encode(body),
     );
 
     final data = json.decode(response.body);
@@ -569,7 +740,12 @@ class ApiService {
     double? longitude,
     int? capacity,
     int? assignedTo,
+    /// When true, sends `assigned_to` even if null (clears assignment on server).
+    bool sendAssignedTo = false,
     String? status,
+    /// When true, sends `zone` (null clears on server when supported).
+    bool sendZone = false,
+    String? zone,
   }) async {
     final Map<String, dynamic> body = {};
     if (binCode != null) body['bin_code'] = binCode;
@@ -577,8 +753,16 @@ class ApiService {
     if (latitude != null) body['latitude'] = latitude;
     if (longitude != null) body['longitude'] = longitude;
     if (capacity != null) body['capacity'] = capacity;
-    if (assignedTo != null) body['assigned_to'] = assignedTo;
+    if (sendAssignedTo) {
+      body['assigned_to'] = assignedTo;
+    } else if (assignedTo != null) {
+      body['assigned_to'] = assignedTo;
+    }
     if (status != null) body['status'] = status;
+    if (sendZone) {
+      final z = zone?.trim();
+      body['zone'] = (z == null || z.isEmpty) ? null : z;
+    }
 
     final response = await _put(
       Uri.parse('$baseUrl/bins/$binId'),
@@ -602,6 +786,64 @@ class ApiService {
     final data = json.decode(response.body);
     if (response.statusCode != 200 || data['success'] != true) {
       throw Exception(data['message'] ?? 'Failed to delete bin');
+    }
+  }
+
+  /// Polls [getBins] every 30s while active. Compares [BinModel.fillLevel] to
+  /// [PreferencesKeys.adminFillLevelAlertThreshold] in SharedPreferences.
+  /// Alerts once per bin when crossing into “full” until level drops below threshold.
+  ///
+  /// The timer keeps running while the app process stays alive (including many
+  /// background transitions on Android). iOS may suspend the isolate after a
+  /// period in background; use push/BG fetch for guaranteed server-driven alerts.
+  void startBinMonitoring() {
+    if (kIsWeb || !hasToken) return;
+    if (_binMonitorTimer != null) return;
+
+    _binMonitoringActive = true;
+    unawaited(_binMonitoringTick());
+    _binMonitorTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => unawaited(_binMonitoringTick()),
+    );
+  }
+
+  void stopBinMonitoring() {
+    _binMonitoringActive = false;
+    _binMonitorTimer?.cancel();
+    _binMonitorTimer = null;
+    _fillAlertedBinIds.clear();
+  }
+
+  Future<void> _binMonitoringTick() async {
+    if (!_binMonitoringActive || !hasToken || kIsWeb) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final rawT = prefs.getInt(PreferencesKeys.adminFillLevelAlertThreshold);
+      final threshold = (rawT ?? 80).toDouble().clamp(0, 100);
+
+      final rawBins = await getBins();
+      final bins = BinModel.listFromDynamic(rawBins);
+      final idsSeen = <int>{};
+
+      for (final b in bins) {
+        if (b.id == 0) continue;
+        idsSeen.add(b.id);
+
+        if (b.fillLevel >= threshold) {
+          if (!_fillAlertedBinIds.contains(b.id)) {
+            _fillAlertedBinIds.add(b.id);
+            await NotificationService.showNotification(b.binCode, b.location);
+          }
+        } else {
+          _fillAlertedBinIds.remove(b.id);
+        }
+      }
+
+      _fillAlertedBinIds.removeWhere((id) => !idsSeen.contains(id));
+    } catch (e, st) {
+      debugPrint('Bin monitoring: $e\n$st');
     }
   }
 }
